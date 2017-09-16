@@ -1,0 +1,27 @@
+[package]
+authors = ["Ivan Dubrov <dubrov.ivan@gmail.com>"]
+description = "Example using lcd crate"
+name = "lcd-example-bluepill"
+version = "0.1.0"
+
+[dependencies]
+cortex-m = "0.3.1"
+
+[dependencies.cortex-m-rt]
+version = "0.3.5"
+features = ["abort-on-panic"]
+
+[dependencies.stm32f103xx]
+version = "0.7.5"
+features = ["rt"]
+
+[dependencies.lcd]
+version = "0.2.0"
+
+[profile.dev]
+lto = true
+opt-level = 1
+
+[profile.release]
+debug = false
+lto = true

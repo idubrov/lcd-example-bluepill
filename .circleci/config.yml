@@ -1,0 +1,11 @@
+version: 2
+jobs:
+  build:
+    docker:
+      - image: idubrov/rust-stm32:latest
+    steps:
+      - checkout
+      # Don't override https github url with git+ssh, CircleCI does that by default
+      - run: git config --global url."ssh://git@github.com".insteadOf ""
+      - run: xargo build
+      - run: xargo clippy
