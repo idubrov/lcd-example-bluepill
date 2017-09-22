@@ -6,14 +6,25 @@
 extern crate stm32f103xx;
 extern crate lcd;
 extern crate cortex_m;
-
-#[macro_use]
-mod util;
+extern crate stm32_extras;
 
 use core::fmt::Write;
 use stm32f103xx::{SYST, GPIOB, RCC};
 use lcd::*;
-use util::delay_us;
+use stm32_extras::GPIOExtras;
+
+// Small helper for delays
+pub fn delay_us(syst: &SYST, delay: u32) {
+    syst.set_reload(delay); // SysTick is 1/8 AHB (9Mhz)
+    syst.clear_current();
+    while !syst.has_wrapped() {}
+}
+
+const RS: usize = 12; // PB12 is RS
+const RW: usize = 13; // PB13 is RW
+const E: usize = 14; // PB14 is E
+const DATA: usize = 6; // PB6-PB9 is DB4-DB7
+
 
 /// Binding of HD44780 instance to the real hardware
 pub struct LcdHardware<'a> {
@@ -23,23 +34,55 @@ pub struct LcdHardware<'a> {
 
 impl<'a> lcd::Hardware for LcdHardware<'a> {
     fn rs(&self, bit: bool) {
-        set_pin!(self.gpiob, 12, bit);
+        self.gpiob.write_pin(RS, bit);
     }
 
     fn enable(&self, bit: bool) {
-        set_pin!(self.gpiob, 14, bit);
+        self.gpiob.write_pin(E, bit);
     }
 
     fn data(&self, data: u8) {
-        let bits = u32::from(data & 0b1111) | // Set '1's
-            (u32::from(!data & 0b1111) << 16); // Clear '0's
-        self.gpiob.bsrr.write(|w| unsafe { w.bits(bits << 6) });
+        self.gpiob.write_pin_range(DATA, 4, u16::from(data));
     }
 }
 
 impl<'a> lcd::Delay for LcdHardware<'a> {
     fn delay_us(&self, delay_usec: u32) {
         delay_us(self.syst, delay_usec);
+    }
+}
+
+// Optional, if not implemented `lcd` library will use delays
+#[cfg(feature = "input")]
+impl<'a> lcd::InputCapableHardware for LcdHardware<'a> {
+    fn rw(&self, bit: bool) {
+        if bit {
+            // LCD has OD output, set all to '0' just to be sure.
+            self.gpiob.write_pin_range(DATA, 4, 0);
+
+            // Re-configure port for input
+            for i in 0..4 {
+                self.gpiob.pin_config(DATA + i).input().floating();
+            }
+
+            // Finally, set R/W to 1 (read)
+            self.gpiob.write_pin(RW, true);
+        } else {
+            // First, set R/W to 0 (write mode)
+            self.gpiob.write_pin(RW, false);
+
+            // To be sure LCD is in read mode
+            delay_us(self.syst, 1);
+
+            // Re-configure port back to output
+            for i in 0..4 {
+                self.gpiob.pin_config(DATA + i).push_pull().output2();
+            }
+        }
+    }
+
+    fn read_data(&self) -> u8 {
+        self.gpiob.read_pin_range(6, 4) as u8
     }
 }
 
@@ -61,18 +104,17 @@ fn run(syst: &SYST, rcc: &RCC, gpiob: &GPIOB) {
     // Setup GPIOB for LCD (all ports are in output mode)
     rcc.apb2enr.modify(|_, w| w.iopben().enabled());
 
-    gpiob.crl.modify(|_, w| w
-        .cnf6().push().mode6().output() // PB6 is DB4
-        .cnf7().push().mode7().output()); // PB7 is DB5
-    gpiob.crh.modify(|_, w| w
-        .cnf12().push().mode12().output() // PB12 is RS
-        .cnf13().push().mode13().output() // PB13 is R/W
-        .cnf14().push().mode14().output() // PB14 is E
-        .cnf8().push().mode8().output() // PB8 is DB6
-        .cnf9().push().mode9().output()); // PB9 is DB7
+    for i in 0..4 {
+        gpiob.pin_config(DATA + i).push_pull().output2();
+    }
 
-    // R/W is always 0 -- we don't use wait flag
-    set_pin!(gpiob, 13, false);
+    gpiob.pin_config(RS).push_pull().output2();
+    gpiob.pin_config(RW).push_pull().output2();
+    gpiob.pin_config(E).push_pull().output2();
+
+    gpiob.write_pin(RS, false);
+    gpiob.write_pin(RW, false);
+    gpiob.write_pin(E, false);
 
     // Init display
     let mut display = Display::new(LcdHardware { syst, gpiob });
