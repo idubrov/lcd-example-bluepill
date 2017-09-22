@@ -13,11 +13,16 @@ use stm32f103xx::{SYST, GPIOB, RCC};
 use lcd::*;
 use stm32_extras::GPIOExtras;
 
-// Small helper for delays
+/// Delay for a given amount of microseconds. Should not be used for precise delays.
+/// Assumes SYST ticks every microsecand and the reload value of 0xffffff (maximum).
+/// `delay` must be less than 0x8000_0000 (SYST is only 24-bit)
 pub fn delay_us(syst: &SYST, delay: u32) {
-    syst.set_reload(delay); // SysTick is 1/8 AHB (9Mhz)
-    syst.clear_current();
-    while !syst.has_wrapped() {}
+    // Essentialy, we do modulo 24-bit arithmetic.
+    let stop_at: u32 = syst.get_current().wrapping_sub(delay - 1);
+    // Run while `stop_at` is less than the counter value ("sign" bit of the difference is zero)
+    // "sign" bit is 24th bit as SYST is 24-bit timer
+    // Run while "(current - (start - delay)) | mod 0x800000 >= 0"
+    while (syst.get_current().wrapping_sub(stop_at) & 0x00800000) == 0 { }
 }
 
 const RS: usize = 12; // PB12 is RS
@@ -98,8 +103,10 @@ fn main() {
 }
 
 fn run(syst: &SYST, rcc: &RCC, gpiob: &GPIOB) {
-    // Used for delay
+    // Used for delays
+    // SysTick is 1/8 AHB (1Mhz with default clock settings)
     syst.enable_counter();
+    syst.set_reload(0x00ffffff);
 
     // Setup GPIOB for LCD (all ports are in output mode)
     rcc.apb2enr.modify(|_, w| w.iopben().enabled());
